@@ -1,0 +1,1 @@
+The .scad files in this directory are OpenSCAD files for the case of the Shutter Control. OpenSCAD version 2019.05 was used. The .stl files are the export from OpenSCAD, which than can be used to slice using different slice apps (such PrusaSlicer) the get printable .gcode files.
