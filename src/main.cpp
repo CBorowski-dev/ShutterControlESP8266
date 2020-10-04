@@ -42,10 +42,19 @@
 // After flashing new firmware on Sonoff Dual R2 the following steps have to be performed:
 //
 // 1. Change the configuration to 'Sonoff Dual R2 (39)'
-// 2. Set 'Interlock on' per Tasmota console
-// 3. Used rules:
-//    rule1 on Power1#state=1 do backlog delay 280; Power1 off endon
-//    rule2 on Power2#state=1 do backlog delay 280; Power2 off endon
+// 2. Configure GPIO1 & GPIO9:
+//    GPIO0 --> Switch1 (9)
+//    GPIO9 --> Switch2 (10)
+// 3. Set 'Interlock on' per Tasmota console
+// 4. Deactivate old rules:
+//    rule1 0 // old rule: rule1 on Power1#state=1 do backlog delay 280; Power1 off endon
+//    rule2 0 // old rule: rule2 on Power2#state=1 do backlog delay 280; Power2 off endon
+// 5. Set PulseTime to 28 sec
+//    PulseTime 1 128
+//    PulseTime 2 128
+// 6. Set SwitchMode for Button 0 & 1 to mode 3
+//    SwitchMode1 3
+//    SwitchMode2 3
 // -----------------------------------------------------------
 
 // #define MQTT_SUBSCRIBE "stat/home/downstairs/shutters/#"
@@ -116,13 +125,13 @@ void moveShutter(uint8_t direction) {
       if (direction == UP) {
         // up --> power2
         Serial.println((cmnd + "/POWER2").c_str());
-        if(!mqttClient.publish((cmnd + "/POWER2").c_str(), "ON")) {
+        if(!mqttClient.publish((cmnd + "/POWER2").c_str(), "TOGGLE")) {
           Serial.println("Could not send up MQTT message");
         }
       } else {
         // down --> power1
         Serial.println((cmnd + "/POWER1").c_str());
-        if(!mqttClient.publish((cmnd + "/POWER1").c_str(), "ON")) {
+        if(!mqttClient.publish((cmnd + "/POWER1").c_str(), "TOGGLE")) {
           Serial.println("Could not send up MQTT message");
         }
       }
@@ -271,7 +280,7 @@ void loop() {
       }
 
       if (mcp.digitalRead(15)) {
-        Serial.println("Change up <-> down");
+        Serial.println("Change upstairs <-> downstairs");
         changeLevel();
       }
     }
