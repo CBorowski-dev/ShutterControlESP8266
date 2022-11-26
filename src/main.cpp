@@ -3,7 +3,7 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 #include <Wire.h>
-#include <Adafruit_MCP23017.h>
+#include <Adafruit_MCP23X17.h>
 
 #define UP 1
 #define DOWN 0
@@ -38,6 +38,7 @@
 //
 // Lichter:
 // Licht Garderobe: home/lights/wardrobe
+// Licht Küche: home/lights/floor1/light1 <-- Regalboden über Spüle
 //
 // After flashing new firmware on Sonoff Dual R2 the following steps have to be performed:
 //
@@ -50,16 +51,17 @@
 //    rule1 0 // old rule: rule1 on Power1#state=1 do backlog delay 280; Power1 off endon
 //    rule2 0 // old rule: rule2 on Power2#state=1 do backlog delay 280; Power2 off endon
 // 5. Set PulseTime to 28 sec
-//    PulseTime 1 128
-//    PulseTime 2 128
+//    PulseTime1 128
+//    PulseTime2 128
 // 6. Set SwitchMode for Button 0 & 1 to mode 3
 //    SwitchMode1 3
 //    SwitchMode2 3
 // -----------------------------------------------------------
 
 // #define MQTT_SUBSCRIBE "stat/home/downstairs/shutters/#"
-#define MQTT_TOPIC_CMND_BASE_DOWNSTAIRS "cmnd/home/shutters/sd"
-#define MQTT_TOPIC_CMND_BASE_UPSTAIRS "cmnd/home/shutters/su"
+#define MQTT_TOPIC_CMND_BASE_SHUTTERS_FLOOR1 "cmnd/home/shutters/sd"
+#define MQTT_TOPIC_CMND_BASE_SHUTTERS_FLOOR2 "cmnd/home/shutters/su"
+#define MQTT_TOPIC_CMND_BASE_LIGHTS_FLOOR1 "cmnd/home/lights/floor1/light"
 
 // SSID/Password for WLAN
 const char* ssid = SSIDx;
@@ -71,13 +73,14 @@ const char* mqtt_server = "192.168.188.47";
 WiFiClient wifiClient;
 IPAddress ipAddress;
 PubSubClient mqttClient(wifiClient);
-Adafruit_MCP23017 mcp;
+Adafruit_MCP23X17 mcp;
 
-uint8_t isDownstairs = TRUE;
-// holds the shutter the user points to
-uint8_t shutterSelection = 0;
-// holds the selected shutter... every bit represents one shutter
-uint8_t selectedShutters = 0;
+// holds the control level: 0=shutters down; 1==shutters up; 2=lights
+uint8_t controlLevel = 0;
+// holds the devices the user points to
+uint8_t deviceSelection = 0;
+// holds the selected devices... every bit represents one shutter
+uint8_t selectedDevices = 0;
 // remembers the timestamp of the last button press
 long lastUsage = 0;
 
@@ -103,7 +106,7 @@ void setup_wifi() {
   mcp.digitalWrite(10, HIGH);
 }
 
-void moveShutter(uint8_t direction) {
+void moveShutters(uint8_t direction) {
   // the following code works correct when 'interlock' is 
   // set on Tasmota (enter 'interlock on' in Tasmota console)
 
@@ -113,12 +116,12 @@ void moveShutter(uint8_t direction) {
   uint8_t minShutter = 1;
 
   while (currentShutter >= minShutter) {
-    if ((selectedShutters & currentShutter) > 0) {
+    if ((selectedDevices & currentShutter) > 0) {
       String cmnd;
-      if ( isDownstairs == TRUE ) {
-        cmnd = MQTT_TOPIC_CMND_BASE_DOWNSTAIRS;
+      if ( controlLevel == 0 ) {
+        cmnd = MQTT_TOPIC_CMND_BASE_SHUTTERS_FLOOR1;
       } else {
-        cmnd = MQTT_TOPIC_CMND_BASE_UPSTAIRS;
+        cmnd = MQTT_TOPIC_CMND_BASE_SHUTTERS_FLOOR2;
       }
       cmnd += z + '0' - 48;
 
@@ -141,12 +144,33 @@ void moveShutter(uint8_t direction) {
   }
 }
 
+void switchLights() {
+  uint8_t z = 1;
+
+  uint8_t currentLight = 8;
+  uint8_t minLight = 1;
+
+  while (currentLight >= minLight) {
+    if ((selectedDevices & currentLight) > 0) {
+      String cmnd = MQTT_TOPIC_CMND_BASE_LIGHTS_FLOOR1;
+      cmnd += z + '0' - 48;
+
+      Serial.println((cmnd + "/POWER1").c_str());
+      if(!mqttClient.publish((cmnd + "/POWER1").c_str(), "TOGGLE")) {
+        Serial.println("Could not send up MQTT message");
+      }
+    }
+    currentLight /= 2;
+    z += 1;
+  }
+}
+
 void setup_MQTT() {
   mqttClient.setServer(mqtt_server, 1883);
 }
 
 void setup_MCP23017() {
-  mcp.begin();      // use default address 0
+  mcp.begin_I2C();      // use default address 0
 
   // How MCP23017 pins are addressed
   // Pin 0 <-> GPA0
@@ -171,17 +195,6 @@ void setup_MCP23017() {
   mcp.pinMode(6, INPUT); // 4'th shutter up <-> GPA6
   mcp.pinMode(7, INPUT); // 4'th shutter down <-> GPA7
   mcp.pinMode(15, INPUT); // upstairs/downstairs button <-> GPB7
-
-  // Pullups for buttons
-  mcp.pullUp(0, LOW);  // turn off a 100K pullup internally
-  mcp.pullUp(1, LOW);  // turn off a 100K pullup internally
-  mcp.pullUp(2, LOW);  // turn off a 100K pullup internally
-  mcp.pullUp(3, LOW);  // turn off a 100K pullup internally
-  mcp.pullUp(4, LOW);  // turn off a 100K pullup internally
-  mcp.pullUp(5, LOW);  // turn off a 100K pullup internally
-  mcp.pullUp(6, LOW);  // turn off a 100K pullup internally
-  mcp.pullUp(7, LOW);  // turn off a 100K pullup internally
-  mcp.pullUp(15, LOW);  // turn off a 100K pullup internally
 }
 
 void reconnect() {
@@ -203,21 +216,15 @@ void reconnect() {
 
 void set_Level_LEDs() {
   // Switch LEDs on/off
-  if ( isDownstairs == TRUE ) {
-    mcp.digitalWrite(UP_LED_PIN, LOW);
-    mcp.digitalWrite(DOWN_LED_PIN, HIGH);
-  } else {
-    mcp.digitalWrite(UP_LED_PIN, HIGH);
-    mcp.digitalWrite(DOWN_LED_PIN, LOW);
-  }
+  mcp.digitalWrite(DOWN_LED_PIN, (controlLevel+1) & 1);
+  mcp.digitalWrite(UP_LED_PIN, (controlLevel & 1) | ((controlLevel >> 1) & 1));
 }
 
-void changeLevel() {
-  if ( isDownstairs == TRUE ) {
-    isDownstairs = FALSE;
-  } else {
-    isDownstairs = TRUE;
-  }
+void changeControlLevel() {
+  // controlLevel == 0 --> shutters in the first floor
+  // controlLevel == 1 --> shutters in the second floor
+  // controlLevel == 2 --> lights in the first floor
+  controlLevel = (controlLevel + 1) % 3;
   set_Level_LEDs();
 }
 
@@ -242,12 +249,12 @@ void loop() {
       }
       i++;
     }
-    // Check Upstairs/Downstairs button
+    // Check Upstairs/Downstairs/Lights button
     if (!buttonPressed && mcp.digitalRead(15)) {
       buttonPressed = TRUE;
     }
     
-    // Button(s) are pressen, so evaluate and control associated shutters
+    // Button(s) are pressen, so evaluate and control associated devices
     if (buttonPressed) {
       lastUsage = now;
       if (!mqttClient.connected()) {
@@ -255,33 +262,46 @@ void loop() {
       }
       mqttClient.loop();
 
-      // Port A pins GPA0, GPA2, GPA4, GPA6 are for shutters 1-4 direction up
-      // shutters 1-4 are mapped to the first 4 bits: 1->bit 0; 2->bit 1; 3->bit 2; 4->bit 3
-      selectedShutters = 0;
+      // Port A pins GPA0, GPA2, GPA4, GPA6 are for devices (shutters 1-4 direction up / lights 1-4 on)
+      // shutters/lights 1-4 are mapped to the first 4 bits: 1->bit 0; 2->bit 2; 3->bit 4; 4->bit 6
+      selectedDevices = 0;
       for (uint8_t i = 0; i<7; i+=2) {
         if (mcp.digitalRead(i)) {
-          selectedShutters = selectedShutters ^ (uint8_t) pow(2, 3 - (i/2));
+          selectedDevices = selectedDevices ^ (uint8_t) pow(2, 3 - (i/2));
         }
       }
-      if (selectedShutters != 0) {
-        moveShutter(UP);
+      if (selectedDevices != 0) {
+        if (controlLevel <2) {
+          // controlLevel == 0 --> shutters in the first floor
+          // controlLevel == 1 --> shutters in the second floor
+          moveShutters(UP);
+        } else {
+          // no lights are avaiable to switch in the second floor
+        }
       }
 
-      // Port A pins GPA1, GPA3, GPA5, GPA7 are for shutters 1-4 direction down
-      // shutters 1-4 are mapped to the first 4 bits: 1->bit 0; 2->bit 1; 3->bit 2; 4->bit 3
-      selectedShutters = 0;
+      // Port A pins GPA1, GPA3, GPA5, GPA7 are for devices (shutters 1-4 direction down / lights 1-4 off)
+      // shutters/lights 1-4 are mapped to the first 4 bits: 1->bit 1; 2->bit 3; 3->bit 5; 4->bit 7
+      selectedDevices = 0;
       for (uint8_t i = 1; i<8; i+=2) {
         if (mcp.digitalRead(i)) {
-          selectedShutters = selectedShutters ^ (uint8_t) pow(2, 3 - ((i-1)/2));
+          selectedDevices = selectedDevices ^ (uint8_t) pow(2, 3 - ((i-1)/2));
         }
       }
-      if (selectedShutters != 0) {
-        moveShutter(DOWN);
+      if (selectedDevices != 0) {
+        if (controlLevel <2) {
+          // controlLevel == 0 --> shutters in the first floor
+          // controlLevel == 1 --> shutters in the second floor
+          moveShutters(DOWN);
+        } else {
+          // Switch lights in the first floor
+          switchLights();
+        }
       }
 
       if (mcp.digitalRead(15)) {
         Serial.println("Change upstairs <-> downstairs");
-        changeLevel();
+        changeControlLevel();
       }
     }
   }
