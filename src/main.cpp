@@ -37,8 +37,9 @@
 // Rollo Kinderzimmer 2:  home/shutters/su4
 //
 // Lichter:
-// Licht Garderobe: home/lights/wardrobe
-// Licht Küche: home/lights/floor1/light1 <-- Regalboden über Spüle
+// Licht Küche:     home/lights/floor1/light1/POWER1 <-- Regalboden über Spüle
+// Licht Küche:     home/lights/floor1/light1/POWER2 <-- Regalboden im Wandschrank
+// Licht Garderobe: home/lights/wardrobe/POWER
 //
 // After flashing new firmware on Sonoff Dual R2 the following steps have to be performed:
 //
@@ -62,13 +63,14 @@
 #define MQTT_TOPIC_CMND_BASE_SHUTTERS_FLOOR1 "cmnd/home/shutters/sd"
 #define MQTT_TOPIC_CMND_BASE_SHUTTERS_FLOOR2 "cmnd/home/shutters/su"
 #define MQTT_TOPIC_CMND_BASE_LIGHTS_FLOOR1 "cmnd/home/lights/floor1/light"
+#define MQTT_TOPIC_CMND_BASE_LIGHTS_WARDROBE "cmnd/home/lights/wardrobe"
 
 // SSID/Password for WLAN
 const char* ssid = SSIDx;
 const char* password = PASSWORD;
 
 // MQTT Broker IP address
-const char* mqtt_server = "192.168.188.47";
+const char* mqtt_server = "192.168.188.91";
 
 WiFiClient wifiClient;
 IPAddress ipAddress;
@@ -145,23 +147,37 @@ void moveShutters(uint8_t direction) {
 }
 
 void switchLights() {
-  uint8_t z = 1;
-
   uint8_t currentLight = 8;
   uint8_t minLight = 1;
 
   while (currentLight >= minLight) {
     if ((selectedDevices & currentLight) > 0) {
+      // Default-Belegung
       String cmnd = MQTT_TOPIC_CMND_BASE_LIGHTS_FLOOR1;
-      cmnd += z + '0' - 48;
+      cmnd += 1 + '0' - 48;
+      if (currentLight == 8) {
+        // Licht im Regalboden über Spüle
+        Serial.println((cmnd + "/POWER1").c_str());
+        if(!mqttClient.publish((cmnd + "/POWER1").c_str(), "TOGGLE")) {
+          Serial.println("Could not send up MQTT message");
+        }
+      } else if (currentLight == 4) {
+        // Licht im Regalboden im Wandschrank
+        Serial.println((cmnd + "/POWER2").c_str());
+        if(!mqttClient.publish((cmnd + "/POWER2").c_str(), "TOGGLE")) {
+          Serial.println("Could not send up MQTT message");
+        }
+      } else if (currentLight == 2) {
+        // Licht im Flurschrank
+        cmnd = MQTT_TOPIC_CMND_BASE_LIGHTS_WARDROBE;
 
-      Serial.println((cmnd + "/POWER1").c_str());
-      if(!mqttClient.publish((cmnd + "/POWER1").c_str(), "TOGGLE")) {
-        Serial.println("Could not send up MQTT message");
+        Serial.println((cmnd + "/POWER").c_str());
+        if(!mqttClient.publish((cmnd + "/POWER").c_str(), "TOGGLE")) {
+          Serial.println("Could not send up MQTT message");
+        }
       }
     }
     currentLight /= 2;
-    z += 1;
   }
 }
 
